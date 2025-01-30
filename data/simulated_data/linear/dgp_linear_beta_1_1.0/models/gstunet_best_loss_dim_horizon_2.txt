@@ -1,0 +1,20 @@
+{
+    "Best Test RMSE": 0.9462402241638228,
+    "Normalized Test RMSE": 0.43037323419927187,
+    "Denormalized Test RMSE": 0.5816391257631183,
+    "Denormalized Test SD": 0.008468255596520573,
+    "Joint epochs trained": 11,
+    "Batch size": 4,
+    "Warm start epochs": 5,
+    "Num epochs": 100,
+    "Learning rate": 0.0005,
+    "Learning rate warm": 0.0005,
+    "Early stopping patience": 10,
+    "Scheduler patience": 3,
+    "Use constant feature": false,
+    "H size": 16,
+    "FC layers": [
+        8
+    ],
+    "Dimension of horizon": 2
+}
