@@ -1,0 +1,112 @@
+{
+    "additional_resp": 5352,
+    "Glenn": {
+        "additional_resp": -4,
+        "pop": 27967
+    },
+    "Lake": {
+        "additional_resp": 109,
+        "pop": 64317
+    },
+    "Napa": {
+        "additional_resp": 89,
+        "pop": 138789
+    },
+    "Stanislaus": {
+        "additional_resp": 315,
+        "pop": 548126
+    },
+    "Yuba": {
+        "additional_resp": 27,
+        "pop": 77557
+    },
+    "Butte": {
+        "additional_resp": 248,
+        "pop": 230339
+    },
+    "Mendocino": {
+        "additional_resp": 71,
+        "pop": 87401
+    },
+    "San Francisco": {
+        "additional_resp": 287,
+        "pop": 880696
+    },
+    "Yolo": {
+        "additional_resp": 85,
+        "pop": 220118
+    },
+    "San Mateo": {
+        "additional_resp": 316,
+        "pop": 768681
+    },
+    "Santa Cruz": {
+        "additional_resp": 182,
+        "pop": 273841
+    },
+    "Solano": {
+        "additional_resp": 112,
+        "pop": 445725
+    },
+    "Sutter": {
+        "additional_resp": 78,
+        "pop": 96348
+    },
+    "Tehama": {
+        "additional_resp": 119,
+        "pop": 64018
+    },
+    "Contra Costa": {
+        "additional_resp": 325,
+        "pop": 1150519
+    },
+    "Kings": {
+        "additional_resp": 77,
+        "pop": 151382
+    },
+    "Colusa": {
+        "additional_resp": 55,
+        "pop": 21418
+    },
+    "Merced": {
+        "additional_resp": 154,
+        "pop": 274151
+    },
+    "San Joaquin": {
+        "additional_resp": 352,
+        "pop": 752491
+    },
+    "Tulare": {
+        "additional_resp": 91,
+        "pop": 464589
+    },
+    "Marin": {
+        "additional_resp": 218,
+        "pop": 259662
+    },
+    "Placer": {
+        "additional_resp": 161,
+        "pop": 392330
+    },
+    "Fresno": {
+        "additional_resp": 290,
+        "pop": 991950
+    },
+    "Sacramento": {
+        "additional_resp": 287,
+        "pop": 1538746
+    },
+    "Alameda": {
+        "additional_resp": 504,
+        "pop": 1666756
+    },
+    "Sonoma": {
+        "additional_resp": 269,
+        "pop": 498643
+    },
+    "Santa Clara": {
+        "additional_resp": 522,
+        "pop": 1932337
+    },
+    "train_epochs": 39
+}

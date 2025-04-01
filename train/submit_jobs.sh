@@ -2,11 +2,11 @@
 
 # 1) Create arrays of beta_1 and dim_horizon values
 beta_1_values=(0.0 0.5 1.0 1.5 2.0 2.5 3.0)
-dim_horizon_values=(2 5 10)
-#beta_1_values=(0.0 0.5 1.0 1.5 2.0 2.5 3.0 5.0 7.5 10.0)
-#dim_horizon_values=(5 10 2)
+dim_horizon_values=(5 10)
+#beta_1_values=(0.0 0.5 1.0 1.5 2.0 2.5 3.0)
+#dim_horizon_values=(2 5 10)
 
-module load pytorch
+#module load pytorch
 
 # Define the LOCAL flag
 LOCAL=true  # Set to true to run jobs locally, or false to submit via sbatch
@@ -36,6 +36,8 @@ do
       BETA_1=$b1 DIM_HORIZON=$dh ./run_gstunet_job.sh
       echo "Running run_stcinet_job.sh locally for beta_1=$b1, dim_horizon=$dh..."
       BETA_1=$b1 DIM_HORIZON=$dh ./run_stcinet_job.sh
+      echo "Running run_ipw_job.sh locally for beta_1=$b1, dim_horizon=$dh..."
+      BETA_1=$b1 DIM_HORIZON=$dh ./run_ipw_job.sh
     else
       # Submit jobs to SLURM
       echo "Submitting unet job for beta_1=$b1, dim_horizon=$dh via sbatch..."
@@ -43,12 +45,14 @@ do
       echo "Submitting gstunet job for beta_1=$b1, dim_horizon=$dh..."
       sbatch --export=BETA_1=$b1,DIM_HORIZON=$dh run_gstunet_job.sh
       echo "Submitting stcinet job for beta_1=$b1, dim_horizon=$dh via sbatch..."
-      sbatch --export=BETA_1=$b1,DIM_HORIZON=$dh run_stcinet_list_job.sh
+      sbatch --export=BETA_1=$b1,DIM_HORIZON=$dh run_stcinet_job.sh
+      echo "Submitting ipw job for beta_1=$b1, dim_horizon=$dh via sbatch..."
+      sbatch --export=BETA_1=$b1,DIM_HORIZON=$dh run_ipw_job.sh
     fi
   done
 done
 
 if [ "$LOCAL" = true ]; then
-  python ../data/simulated_data/summarize.py
+  cd ../data/simulated_data && python summarize.py
 fi
 

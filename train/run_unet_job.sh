@@ -12,7 +12,7 @@
 #############################
 # Load your software stack #
 #############################
-module load pytorch
+#module load pytorch
 
 # Debug info
 echo "Job Name: ${SLURM_JOB_NAME}"

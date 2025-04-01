@@ -12,7 +12,7 @@
 #############################
 # Load your software stack #
 #############################
-module load pytorch
+#module load pytorch
 
 # Debug info
 echo "Job Name: ${SLURM_JOB_NAME}"
@@ -30,4 +30,4 @@ python train_stcinet.py \
   --learning_rate 0.0005 \
   --num_epochs 100 \
   --early_stopping_patience 10 \
-  --scheduler_patience 5
+  --scheduler_patience 5 

@@ -20,6 +20,7 @@ for beta_1 in beta_1_values:
             "UNet": f"unetlstm_best_loss_dim_horizon_{dim_horizon}.txt",
             "GSTUNet": f"gstunet_best_loss_dim_horizon_{dim_horizon}.txt",
             "STCINet": f"stcinet_best_loss_dim_horizon_{dim_horizon}.txt",
+            "IPWUNet": f"ipwunet_best_loss_dim_horizon_{dim_horizon}.txt",
         }
 
         # Iterate over the models
@@ -66,7 +67,7 @@ pivot_df = df.pivot_table(
 ).reset_index()
 
 # Sort by dim_horizon
-model_order = ["UNet", "GSTUNet", "STCINet"] 
+model_order = ["UNet", "GSTUNet", "STCINet", "IPWUNet"] 
 pivot_df["model_name"] = pd.Categorical(pivot_df["model_name"], categories=model_order, ordered=True)
 pivot_df = pivot_df.sort_values(by=["dim_horizon", "model_name"])
 

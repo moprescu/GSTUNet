@@ -1,0 +1,13 @@
+{
+    "Best Test RMSE": 39.090506749105536,
+    "Normalized Test RMSE": 0.7857517622085313,
+    "Denormalized Test RMSE": 1.0604985403494207,
+    "Denormalized Test SD": 0.00424551229007216,
+    "Epochs trained": 11,
+    "Num Epochs": 100,
+    "Learning rate": 0.0005,
+    "Batch size": 4,
+    "Early stopping patience": 10,
+    "Scheduler patience": 5,
+    "Dimension of horizon": 10
+}

@@ -1,8 +1,8 @@
 {
-    "Best Test RMSE": 0.9072452886397747,
-    "Normalized Test RMSE": 0.6199695321257006,
-    "Denormalized Test RMSE": 0.8371979667006442,
-    "Denormalized Test SD": 0.006636053333687129,
+    "Best Test RMSE": 0.9077092913301926,
+    "Normalized Test RMSE": 0.4070442212283954,
+    "Denormalized Test RMSE": 0.5496666906168655,
+    "Denormalized Test SD": 0.006350197523678425,
     "Epochs trained": 14,
     "Num Epochs": 100,
     "Learning rate": 0.0005,

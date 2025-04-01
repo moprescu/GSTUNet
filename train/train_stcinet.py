@@ -75,8 +75,9 @@ def main():
     ##################################
     # Load the training/test dataset #
     ##################################
-    train_dataset = SimulatedData(dgp_data_dir, n_train=150, train=True, tlen=tlen)
-    test_dataset = SimulatedData(dgp_data_dir, n_train=150, train=False, tlen=tlen)
+    n_train = 150 # TODO: replace with the number of training samples read from the data dictionary
+    train_dataset = SimulatedData(dgp_data_dir, n_train=n_train, train=True, tlen=tlen)
+    test_dataset = SimulatedData(dgp_data_dir, n_train=n_train, train=False, tlen=tlen)
 
     # Load counterfactual data
     A_counter = torch.tensor(
@@ -129,7 +130,6 @@ def main():
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', patience=scheduler_patience, factor=0.5)
 
     # Early stopping parameters
-    early_stopping_patience = early_stopping_patience
     best_loss = float('inf')
     patience_counter = 0
 

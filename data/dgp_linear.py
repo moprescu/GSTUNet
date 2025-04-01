@@ -229,10 +229,6 @@ def generate_counterfactuals(
                         alpha_0, alpha_1, alpha_2, alpha_3,
                         epsilon_L, K_X
                     )
-                    generate_next_A(
-                        t, X_test[i], A_test[i], mu=None,
-                        beta_0=beta_0, beta_1=beta_1, K_A=K_A, L=L
-                    )
                     # Y update
                     generate_next_Y(
                         t, X_test[i], A_test[i], Y_test[i],
@@ -252,10 +248,6 @@ def generate_counterfactuals(
                     t, X_test[i], A_test[i],
                     alpha_0, alpha_1, alpha_2, alpha_3,
                     epsilon_L, K_X
-                )
-                generate_next_A(
-                    t, X_test[i], A_test[i], mu=None,
-                    beta_0=beta_0, beta_1=beta_1, K_A=K_A, L=L
                 )
                 # Y update
                 generate_next_Y(

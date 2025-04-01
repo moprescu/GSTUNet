@@ -1,4 +1,6 @@
+import numpy as np
 import torch
+from torch.utils.data import Dataset
 
 class DataNormalizer:
     def __init__(self, train_loader):
@@ -164,3 +166,46 @@ class DataNormalizer:
         train_loader_normalized = self.normalize_loader(train_loader)
         test_loader_normalized = self.normalize_loader(test_loader)
         return train_loader_normalized, test_loader_normalized
+
+
+class BootstrappedDataset(Dataset):
+    def __init__(self, original_dataset, n_samples=None, random_seed=None):
+        """
+        Creates a bootstrap sample of 'original_dataset'.
+        By default, n_samples = len(original_dataset).
+
+        Parameters
+        ----------
+        original_dataset : Dataset
+            The original PyTorch Dataset from which to sample.
+        n_samples : int, optional
+            Number of samples in the bootstrapped dataset.
+            If None, defaults to len(original_dataset).
+        random_seed : int, optional
+            Random seed for reproducible sampling. If None, uses current NumPy RNG state.
+        """
+        self.original_dataset = original_dataset
+        self.n_original = len(original_dataset)
+
+        # If n_samples not specified, use the size of the original dataset
+        if n_samples is None:
+            n_samples = self.n_original
+        self.n_samples = n_samples
+
+        # Create a local random state so as not to affect global seeds
+        if random_seed is not None:
+            rng = np.random.RandomState(random_seed)
+        else:
+            rng = np.random  # use the global NumPy state
+
+        # Sample indices with replacement
+        self.indices = rng.randint(low=0, high=self.n_original, size=self.n_samples)
+
+    def __len__(self):
+        return self.n_samples
+
+    def __getitem__(self, idx):
+        # Map the requested index to one of the sampled indices
+        original_idx = self.indices[idx]
+        return self.original_dataset[original_idx]
+

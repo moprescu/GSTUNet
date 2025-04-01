@@ -24,3 +24,7 @@ This will produce the ```summary.csv``` file in ```data/simulated_data/linear```
 ```
 cd train && python wildfire_experiment.py
 ```
+* For bootstrap confidence intervals:
+```
+cd train && ./submit_wildfire_jobs.sh
+```
