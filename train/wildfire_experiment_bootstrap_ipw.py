@@ -22,6 +22,7 @@ import torch
 import torch.nn as nn
 import numpy as np
 import torch.nn.functional as F
+from torchmetrics.classification import BinaryAUROC
 
 from wildfire_utils import get_grid_gdf, pad_func, crop_func, compute_grid_weights, compute_county_from_grid_area_weighted
 
@@ -90,7 +91,7 @@ def main():
     counties_sindex = california_counties.sindex
 
     ############################
-    ### Train GSTUNet model ####
+    ### Train IPWUNet model ####
     ############################
     # Parameter counting function
     def count_parameters(model):
@@ -157,13 +158,9 @@ def main():
     early_stopping_patience = 10
 
     in_channel = 7
-    h_size = 16
-    fc_layer_sizes = [8] 
-    dim_treatments = 1
-    dim_outcome = 1
-    use_constant_feature = False
     attention = True
-    best_model_name = f'gstunet_dim_horizon_{dim_horizon}_wildfire_bootstrap_{random_seed}.pth'
+    best_propensity_model_name = f'unetlstm_propensity_dim_horizon_{dim_horizon}_wildfire_bootstrap_{random_seed}.pth'
+    best_model_name = f'ipw_dim_horizon_{dim_horizon}_wildfire_bootstrap_{random_seed}.pth'
 
     # Data loader
     train_loader = torch.utils.data.DataLoader(dataset=train_dataset,
@@ -178,242 +175,300 @@ def main():
     normalizer = data_utils.DataNormalizer(train_loader)
     train_loader_normalized, test_loader_normalized = normalizer.normalize(train_loader, test_loader)
     A_counter = normalizer.normalize_A(A_counter).to(device)
+    
+    ##########################
+    # Train Propensity Model #
+    ##########################
+    propensity_model = unet.UNetConvLSTM(
+        in_channel=in_channel,
+        n_classes=1,
+        dim_static=0,
+        bilinear=False,
+        attention=attention
+    ).to(device)
 
-    model = gstunet.GSTUNet(in_channel = in_channel, h_size=h_size, A_counter = A_counter, fc_layer_sizes=fc_layer_sizes, 
-                            dim_treatments = dim_treatments, dim_outcome = dim_outcome, dim_horizon = dim_horizon, 
-                            use_constant_feature = use_constant_feature, attention=attention).to(device)
-
-    print('Number of model parameters: {}'.format(count_parameters(model)))
+    print('Number of model parameters: {}'.format(count_parameters(propensity_model)))
 
     # Loss and optimizer
-    criterion = nn.MSELoss()
-    optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=1e-5)
+    criterion_prop = nn.BCEWithLogitsLoss()
+    optimizer = torch.optim.AdamW(propensity_model.parameters(), lr=learning_rate, weight_decay=1e-5)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', patience=5, factor=0.5)
 
     # Early stopping parameters
-    best_loss = float('inf') 
-    patience_counter = 0 
+    best_loss = float('inf')
+    patience_counter = 0
 
-    if not eval_only:
-        # Train the model
-        #### Warm start via slowly increasing the horizon
-        num_epochs_warm_start = 5
-        for current_head_idx in np.arange(dim_horizon-1, -1, -1):
-            print(f"\nHead idx: {current_head_idx}...")
-            for epoch in range(num_epochs_warm_start):
-                model.train()
-                for i, (x, A, Y) in enumerate(train_loader_normalized):
-                    b = x.size(0)
-                    x = x[:, :-1]
+    total_step = len(train_loader_normalized)
+    for epoch in range(num_epochs):
+        propensity_model.train()
+        for i, ((x_norm, A_norm, Y_norm), (x_raw, A_raw, Y_raw)) in enumerate(zip(train_loader_normalized, train_loader)):
+            b = x_norm.size(0)
+            # Inputs: normalized for x, A (past), Y (past)
+            # shape: x_norm -> [b, tlen, in_channel, H, W]
+            #        A_norm -> [b, tlen, H, W]
+            #        Y_norm -> [b, tlen, H, W]
+            x_input_norm = x_norm[:, :tlen]  # (b, tlen, 3, H, W)
+            A_past_norm = A_norm[:, :tlen].reshape(b, tlen, 1, h0, w0)
+            Y_past_norm = Y_norm[:, :tlen].reshape(b, tlen, 1, h0, w0)
 
-                    A_past = A[:, :-1].reshape(b, tlen, 1, h0, w0)
-                    Y_past = Y[:, :-1].reshape(b, tlen, 1, h0, w0)
-                    A_curr = A[:, -2].reshape(b, 1, h0, w0)
-                    A_curr = A_curr.to(device)
-                    
-                    # Pad mask and flatten  # [1, 1, 48, 48]
-                    padded_mask_flat = padded_mask.repeat(b, 1, 1, 1).view(b, -1)  # [B, 2304]
+            # Target: unnormalized last-step treatment
+            A_curr_unnorm = A_raw[:, -1].to(device) 
+            # Forward pass
+            inputs = torch.cat([x_input_norm, A_past_norm, Y_past_norm], dim=2).to(device)  # [b, tlen, 3+1+1, H, W]
+            inputs = pad_func(inputs)
+            logits = propensity_model(inputs).reshape(b, -1, height, width)
+            A_curr_unnorm = pad_func(A_curr_unnorm.unsqueeze(1))
+            # Compute loss
+            outputs_flat = logits.view(b, -1)         # [B, H_p * W_p]
+            A_curr_unnorm_flat = A_curr_unnorm.view(b, -1)
+            padded_mask_flat = padded_mask.repeat(b, 1, 1, 1).view(b, -1)  # [B, 2304]
+            masked_pred = outputs_flat * padded_mask_flat
+            masked_true = A_curr_unnorm_flat * padded_mask_flat
+            this_loss = criterion_prop(masked_pred, masked_true)
+            loss = this_loss * (height * width)
 
-                    # Forward pass
-                    # Calculate loss iteratively
-                    Y_out = pad_func(Y[:, -1]).reshape(b, -1).to(device)
-                    target = Y_out
-                    loss = torch.zeros((), device=device)
-                    for head_idx in np.arange(dim_horizon-1, current_head_idx-1, -1):
-                        # Trim dataset
-                        A_curr = A_past[:, tlen-dim_horizon+head_idx, :, :, :].to(device)
-                        A_past_copy = A_past.clone() 
-                        inputs = torch.cat([x[:, :tlen-dim_horizon+head_idx+1, :, :, :], 
-                                            A_past_copy[:, :tlen-dim_horizon+head_idx+1, :, :, :],
-                                            Y_past[:, :tlen-dim_horizon+head_idx+1, :, :, :]
-                                        ], dim=2).to(device)
-                        # Pad A_curr and inputs
-                        A_curr = pad_func(A_curr)
-                        inputs = pad_func(inputs)
-                        output = model.forward_grad(inputs, A_curr, head_idx)
-                        this_loss = criterion(output*padded_mask_flat, target*padded_mask_flat)
-                        this_loss = this_loss * (height * width)
-                        """
-                        if i==0:
-                            print(f"Train step 0: Head index = {head_idx}, Loss = {this_loss:0.4f}.")
-                        """
-                        loss += this_loss
-                        target = model.forward_nograd(inputs, head_idx) # for next step
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
 
-                    # Backward and optimize
-                    optimizer.zero_grad()
-                    loss.backward()
-                    optimizer.step()
+            if i % 10 == 0:
+                print('[epoch: {}/{}] [step {}/{}] MSE: {:.4f}'.format(
+                    epoch + 1, num_epochs, i, len(train_loader_normalized), loss.item())
+                )
+                metric = BinaryAUROC()
+                preds = torch.sigmoid(logits)
+                print(f"Propensity AUC: {metric(preds, A_curr_unnorm.type_as(preds)):.4f}")
 
-                    if i % 10 == 0:
-                        print('[epoch: {}/{}] [step {}/{}] MSE: {:.4f}'.format(epoch+1, num_epochs_warm_start, i, len(train_loader_normalized), loss.item()))
+        # Validation / Testing
+        propensity_model.eval()
+        with torch.no_grad():
+            test_loss = 0
+            num_test = 0
+            for i, ((x_norm, A_norm, Y_norm), (x_raw, A_raw, Y_raw)) in enumerate(zip(test_loader_normalized, test_loader)):
+                b = x_norm.size(0)
 
-            # Test the model
-            model.eval()  # eval mode 
-            with torch.no_grad():
-                test_mse = 0
-                for i, (x, A, Y) in enumerate(test_loader_normalized):
-                    b = x.size(0)
-                    x = x[:, :-1]
+                x_input_norm = x_norm[:, :tlen]
+                A_past_norm = A_norm[:, :tlen].reshape(b, tlen, 1, h0, w0)
+                Y_past_norm = Y_norm[:, :tlen].reshape(b, tlen, 1, h0, w0)
 
-                    A_past = A[:, :-1].reshape(b, tlen, 1, h0, w0)
-                    Y_past = Y[:, :-1].reshape(b, tlen, 1, h0, w0)
-                    A_curr = A[:, -2].reshape(b, 1, h0, w0)
-                    A_curr = A_curr.to(device)
-                    
-                    # Pad mask and flatten
-                    padded_mask_flat = padded_mask.repeat(b, 1, 1, 1).view(b, -1)  # [B, 2304]
-
-                    # Forward pass
-                    # Calculate loss iteratively
-                    Y_out = pad_func(Y[:, -1]).reshape(b, -1).to(device)
-                    target = Y_out
-                    loss = torch.zeros((), device=device)
-                    for head_idx in np.arange(dim_horizon-1, -1, -1):
-                        # Trim dataset
-                        A_curr = A_past[:, tlen-dim_horizon+head_idx, :, :, :].to(device)
-                        A_past_copy = A_past.clone()
-                        inputs = torch.cat([x[:, :tlen-dim_horizon+head_idx+1, :, :, :], 
-                                            A_past_copy[:, :tlen-dim_horizon+head_idx+1, :, :, :],
-                                            Y_past[:, :tlen-dim_horizon+head_idx+1, :, :, :]
-                                        ], dim=2).to(device)
-                        # Pad A_curr and inputs
-                        A_curr = pad_func(A_curr)
-                        inputs = pad_func(inputs)
-                        output = model.forward_grad(inputs, A_curr, head_idx)
-                        this_loss = criterion(output*padded_mask_flat, target*padded_mask_flat)
-                        this_loss = this_loss * (height * width)
-                        """
-                        if i==0:
-                            print(f"Test step 0: Head index = {head_idx}, Loss = {this_loss:0.4f}.")
-                        """
-                        loss += this_loss
-                        target = model.forward_nograd(inputs, head_idx) # for next step
-                    test_mse += loss.item() * b
-
-                avg_test_mse = test_mse / len(test_dataset)
-                print('[epoch: {}/{}] Test MSE of the model on the {} test set: {:.4f}'.format(epoch+1, num_epochs_warm_start, len(test_dataset), test_mse / len(test_dataset)))
-
-        ### Train jointly
-        learning_rate = 0.0005
-        optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=1e-5)
-        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', patience=3, factor=0.5)
-
-        # Early stopping parameters
-        best_loss = float('inf') 
-        patience_counter = 0
-        early_stopping_patience = 10
-
-        # Train the model
-        total_step = len(train_loader_normalized)
-        for epoch in range(num_epochs):
-            model.train()
-            for i, (x, A, Y) in enumerate(train_loader_normalized):        
-                b = x.size(0)
-                x = x[:, :-1]
-
-                A_past = A[:, :-1].reshape(b, tlen, 1, h0, w0)
-                Y_past = Y[:, :-1].reshape(b, tlen, 1, h0, w0)
-                A_curr = A[:, -2].reshape(b, 1, h0, w0)
-                A_curr = A_curr.to(device)
-                
-                # Pad mask and flatten  # [1, 1, 48, 48]
+                A_curr_unnorm = A_raw[:, -1].to(device)
+                inputs = torch.cat([x_input_norm, A_past_norm, Y_past_norm], dim=2).to(device)
+                inputs = pad_func(inputs)
+                logits = propensity_model(inputs).reshape(b, -1, height, width)
+                A_curr_unnorm = pad_func(A_curr_unnorm.unsqueeze(1))
+                # Compute loss
+                outputs_flat = logits.view(b, -1)         # [B, H_p * W_p]
+                A_curr_unnorm_flat = A_curr_unnorm.view(b, -1)
                 padded_mask_flat = padded_mask.repeat(b, 1, 1, 1).view(b, -1)  # [B, 2304]
+                masked_pred = outputs_flat * padded_mask_flat
+                masked_true = A_curr_unnorm_flat * padded_mask_flat
+                this_loss = criterion_prop(masked_pred, masked_true)
+                loss = this_loss * (height * width)
+                # Accumulate loss
+                test_loss += loss.item() * b
+                num_test += b
 
-                # Forward pass
-                # Calculate loss iteratively
-                Y_out = pad_func(Y[:, -1]).reshape(b, -1).to(device)
-                target = Y_out
-                loss = torch.zeros((), device=device)
-                for head_idx in np.arange(dim_horizon-1, -1, -1):
-                    # Trim dataset
-                    A_curr = A_past[:, tlen-dim_horizon+head_idx, :, :, :].to(device)
-                    A_past_copy = A_past.clone()
-                    #A_past_copy[:, tlen-dim_horizon+head_idx, :, :, :] = 0
-                    inputs = torch.cat([x[:, :tlen-dim_horizon+head_idx+1, :, :, :], 
-                                        A_past_copy[:, :tlen-dim_horizon+head_idx+1, :, :, :],
-                                        Y_past[:, :tlen-dim_horizon+head_idx+1, :, :, :]
-                                    ], dim=2).to(device)
-                    # Pad A_curr and inputs
-                    A_curr = pad_func(A_curr)
-                    inputs = pad_func(inputs)
-                    output = model.forward_grad(inputs, A_curr, head_idx)
-                    this_loss = criterion(output*padded_mask_flat, target*padded_mask_flat)
-                    this_loss = this_loss * (height * width)
-                    if i==0:
-                        print(f"Train step 0: Head index = {head_idx}, Loss = {this_loss:0.4f}.")
-                    loss += this_loss
-                    target = model.forward_nograd(inputs, head_idx) # for next step
+            avg_test_loss = test_loss / num_test
+            scheduler.step(avg_test_loss)
+            print(f"[Propensity Epoch {epoch+1}/{num_epochs}] Test BCEWithLogits Loss = {avg_test_loss:.4f}")
 
-                # Backward and optimize
-                optimizer.zero_grad()
-                loss.backward()
-                optimizer.step()
+        # Early stopping logic
+        if avg_test_loss < best_loss:
+            best_loss = avg_test_loss
+            patience_counter = 0
+            # Save the best model
+            torch.save(propensity_model.state_dict(), os.path.join(models_dir, best_propensity_model_name))
+        else:
+            patience_counter += 1
+            print(f"No improvement in test MSE for {patience_counter} epoch(s).")
 
-                if i % 10 == 0:
-                    print('[epoch: {}/{}] [step {}/{}] MSE: {:.4f}'.format(epoch+1, num_epochs, i, len(train_loader_normalized), loss.item()))
+        if patience_counter >= early_stopping_patience:
+            print(f"Early stopping triggered. Best Test MSE: {best_loss:.4f}")
+            break
+    
+    ###################
+    # Train IPW Model #
+    ###################
+    ipw_model = unet.UNetConvLSTM(
+        in_channel=in_channel,
+        n_classes=1,
+        dim_static=0,
+        bilinear=False,
+        attention=attention
+    ).to(device)
 
-            # Test the model
-            model.eval()  # eval mode 
-            with torch.no_grad():
-                test_mse = 0
-                for i, (x, A, Y) in enumerate(test_loader_normalized):
-                    b = x.size(0)
-                    x = x[:, :-1]
+    print('Number of model parameters: {}'.format(count_parameters(ipw_model)))
+    # Loss and optimizer
+    criterion = nn.MSELoss()
+    optimizer = torch.optim.AdamW(ipw_model.parameters(), lr=learning_rate*2, weight_decay=1e-5)
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', patience=5, factor=0.5)
 
-                    A_past = A[:, :-1].reshape(b, tlen, 1, h0, w0)
-                    Y_past = Y[:, :-1].reshape(b, tlen, 1, h0, w0)
-                    A_curr = A[:, -2].reshape(b, 1, h0, w0)
-                    A_curr = A_curr.to(device)
+    # Load best propensity model for getting probabilities:
+    best_prop_path = os.path.join(models_dir, best_propensity_model_name)
+    if os.path.exists(best_prop_path):
+        propensity_model.load_state_dict(torch.load(best_prop_path))
+    propensity_model.eval()
 
-                    # Pad mask and flatten  # [1, 1, 48, 48]
-                    padded_mask_flat = padded_mask.repeat(b, 1, 1, 1).view(b, -1)  # [B, 2304]
+    # Early stopping parameters
+    best_loss = float('inf')
+    patience_counter = 0
 
-                    # Forward pass
-                    # Calculate loss iteratively
-                    Y_out = pad_func(Y[:, -1]).reshape(b, -1).to(device)
-                    target = Y_out
-                    loss = torch.zeros((), device=device)
-                    for head_idx in np.arange(dim_horizon-1, -1, -1):
-                        # Trim dataset
-                        A_curr = A_past[:, tlen-dim_horizon+head_idx, :, :, :].to(device)
-                        A_past_copy = A_past.clone()
-                        #A_past_copy[:, tlen-dim_horizon+head_idx, :, :, :] = 0
-                        inputs = torch.cat([x[:, :tlen-dim_horizon+head_idx+1, :, :, :], 
-                                            A_past_copy[:, :tlen-dim_horizon+head_idx+1, :, :, :],
-                                            Y_past[:, :tlen-dim_horizon+head_idx+1, :, :, :]
-                                        ], dim=2).to(device)
-                        # Pad A_curr and inputs
-                        A_curr = pad_func(A_curr)
-                        inputs = pad_func(inputs)
-                        output = model.forward_grad(inputs, A_curr, head_idx)
-                        this_loss = criterion(output*padded_mask_flat, target*padded_mask_flat)
-                        this_loss = this_loss * (height * width)
-                        if i==0:
-                            print(f"Test step 0: Head index = {head_idx}, Loss = {this_loss:0.4f}.")
-                        loss += this_loss
-                        target = model.forward_nograd(inputs, head_idx) # for next step
-                    test_mse += loss.item() * b
+    for epoch in range(num_epochs):
+        ipw_model.train()
+        for i, ((x_norm, A_norm, Y_norm), (x_raw, A_raw, Y_raw)) in enumerate(zip(train_loader_normalized, train_loader)):
+            b = x_norm.size(0)
+            # Get probabilities for treatment sequence
+            probas = torch.zeros(b, dim_horizon, height, width, device=device)
+            for head_idx in range(dim_horizon):
+                # Past up to (history_len + head_idx)
+                # i.e. from 0..(tlen - dim_horizon + head_idx)
+                cutpoint = tlen - dim_horizon + head_idx
+                x_sub_norm = x_norm[:, :cutpoint]  # shape: [b, cutpoint, 3, H, W]
+                A_sub_norm = A_norm[:, :cutpoint].reshape(b, cutpoint, 1, height, width)
+                Y_sub_norm = Y_norm[:, :cutpoint].reshape(b, cutpoint, 1, height, width)
+                inputs_sub = torch.cat([x_sub_norm, A_sub_norm, Y_sub_norm], dim=2).to(device)
 
-                avg_test_mse = test_mse / len(test_dataset)
-                scheduler.step(avg_test_mse)
-                print('[epoch: {}/{}] Test MSE of the model on the {} test set: {:.4f}'.format(epoch+1, num_epochs, len(test_dataset), test_mse / len(test_dataset)))
+                with torch.no_grad():
+                    # Raw logits -> sigmoid -> probability
+                    # TODO: reshape input to match the model's expected input shape
+                    inputs_sub = pad_func(inputs_sub) 
+                    logits = propensity_model(inputs_sub).reshape(b, height, width)
+                    probas[:, head_idx] = torch.sigmoid(logits)
 
-            #scheduler.step()
-            # Early stopping logic
-            if avg_test_mse < best_loss:
-                best_loss = avg_test_mse
-                patience_counter = 0
-                # Save the best model
-                torch.save(model.state_dict(), os.path.join(models_dir, best_model_name))
-            else:
-                patience_counter += 1
-                print(f"No improvement in test MSE for {patience_counter} epoch(s).")
-                
-            if patience_counter >= early_stopping_patience:
-                print(f"Early stopping triggered. Best Test MSE: {best_loss:.4f}")
-                break
-        
+            # Calculate IPW outcome
+            Y_out = Y_norm[:, -1].to(device)
+            A_future = A_raw[:, tlen - dim_horizon : tlen]
+            A_counter_batch = A_counter.squeeze(1).repeat(b, 1, 1, 1).clone().to(device)
+            # Pad inputs
+            Y_out = pad_func(Y_out.unsqueeze(1))
+            A_future = pad_func(A_future)
+            A_counter_batch = pad_func(A_counter_batch)
+            # Calculate the IPW weights
+            mask = (A_future.to(device) == A_counter_batch).float()
+            probas_counter = (probas)*((A_counter_batch==1).float()) + (1-probas)*((A_counter_batch==0).float())
+            weight = torch.ones(b, height, width, device=device)
+            for head_idx in range(dim_horizon):
+                weight *= (mask[:, head_idx] / (probas_counter[:, head_idx] + 1e-8))
+
+            Y_out_ipw = weight * Y_out  # shape [b, H, W]
+
+            # Now pass the (normalized) *past* input to the IPW model:
+            x_sub_norm = x_norm[:, : tlen - dim_horizon]
+            A_sub_norm = A_norm[:, : tlen - dim_horizon].reshape(b, tlen - dim_horizon, 1, height, width)
+            Y_sub_norm = Y_norm[:, : tlen - dim_horizon].reshape(b, tlen - dim_horizon, 1, height, width)
+            inputs_ipw = torch.cat([x_sub_norm, A_sub_norm, Y_sub_norm], dim=2).to(device)
+
+            # IPW model predicts the final outcome
+            inputs_ipw = pad_func(inputs_ipw)
+            outputs = ipw_model(inputs_ipw).reshape(b, height, width)
+            outputs_flat = outputs.view(b, -1)         # [B, H_p * W_p]
+            Y_out_flat = Y_out_ipw.view(b, -1)
+            padded_mask_flat = padded_mask.repeat(b, 1, 1, 1).view(b, -1)  # [B, 2304]
+            masked_pred = outputs_flat * padded_mask_flat
+            masked_true = Y_out_flat * padded_mask_flat
+
+            # Calculate loss
+            this_loss = criterion(masked_pred, masked_true)
+            loss = this_loss * (height * width)
+
+            # Backward and optimize
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+
+            if i % 10 == 0:
+                print('[epoch: {}/{}] [step {}/{}] MSE: {:.4f}'.format(
+                    epoch + 1, num_epochs, i, len(train_loader_normalized), loss.item())
+                )
+
+        # Validation / Testing
+        ipw_model.eval()
+        with torch.no_grad():
+            test_mse = 0.0
+            num_test = 0
+
+            for i, ((x_norm, A_norm, Y_norm), (x_raw, A_raw, Y_raw)) in enumerate(zip(test_loader_normalized, test_loader)):
+                b = x_norm.size(0)
+                # Get probabilities for treatment sequence
+                probas = torch.zeros(b, dim_horizon, height, width, device=device)
+                for head_idx in range(dim_horizon):
+                    # Past up to (history_len + head_idx)
+                    # i.e. from 0..(tlen - dim_horizon + head_idx)
+                    cutpoint = tlen - dim_horizon + head_idx
+                    x_sub_norm = x_norm[:, :cutpoint]  # shape: [b, cutpoint, 3, H, W]
+                    A_sub_norm = A_norm[:, :cutpoint].reshape(b, cutpoint, 1, height, width)
+                    Y_sub_norm = Y_norm[:, :cutpoint].reshape(b, cutpoint, 1, height, width)
+                    inputs_sub = torch.cat([x_sub_norm, A_sub_norm, Y_sub_norm], dim=2).to(device)
+
+                    with torch.no_grad():
+                        # Raw logits -> sigmoid -> probability
+                        # TODO: reshape input to match the model's expected input shape
+                        inputs_sub = pad_func(inputs_sub) 
+                        logits = propensity_model(inputs_sub).reshape(b, height, width)
+                        probas[:, head_idx] = torch.sigmoid(logits)
+
+                # Calculate IPW outcome
+                Y_out = Y_norm[:, -1].to(device)
+                A_future = A_raw[:, tlen - dim_horizon : tlen]
+                A_counter_batch = A_counter.squeeze(1).repeat(b, 1, 1, 1).clone().to(device)
+                # Pad inputs
+                Y_out = pad_func(Y_out.unsqueeze(1))
+                A_future = pad_func(A_future)
+                A_counter_batch = pad_func(A_counter_batch)
+                # Calculate the IPW weights
+                mask = (A_future.to(device) == A_counter_batch).float()
+                probas_counter = (probas)*((A_counter_batch==1).float()) + (1-probas)*((A_counter_batch==0).float())
+                weight = torch.ones(b, height, width, device=device)
+                for head_idx in range(dim_horizon):
+                    weight *= (mask[:, head_idx] / (probas_counter[:, head_idx] + 1e-8))
+
+                Y_out_ipw = weight * Y_out  # shape [b, H, W]
+
+                # Now pass the (normalized) *past* input to the IPW model:
+                x_sub_norm = x_norm[:, : tlen - dim_horizon]
+                A_sub_norm = A_norm[:, : tlen - dim_horizon].reshape(b, tlen - dim_horizon, 1, height, width)
+                Y_sub_norm = Y_norm[:, : tlen - dim_horizon].reshape(b, tlen - dim_horizon, 1, height, width)
+                inputs_ipw = torch.cat([x_sub_norm, A_sub_norm, Y_sub_norm], dim=2).to(device)
+
+                # IPW model predicts the final outcome
+                inputs_ipw = pad_func(inputs_ipw)
+                outputs = ipw_model(inputs_ipw).reshape(b, height, width)
+                outputs_flat = outputs.view(b, -1)         # [B, H_p * W_p]
+                Y_out_flat = Y_out_ipw.view(b, -1)
+                padded_mask_flat = padded_mask.repeat(b, 1, 1, 1).view(b, -1)  # [B, 2304]
+                masked_pred = outputs_flat * padded_mask_flat
+                masked_true = Y_out_flat * padded_mask_flat
+
+                # Calculate loss
+                this_loss = criterion(masked_pred, masked_true)
+                batch_loss = this_loss * (height * width)
+                test_mse += batch_loss.item() * b
+                num_test += b
+
+            avg_test_mse = test_mse / num_test
+            scheduler.step(avg_test_mse)
+            print('[epoch: {}/{}] Test MSE of the model on the {} test set: {:.4f}'.format(
+                epoch + 1, num_epochs, len(test_dataset), avg_test_mse)
+            )
+
+        # Early stopping logic
+        if avg_test_mse < best_loss:
+            best_loss = avg_test_mse
+            patience_counter = 0
+            # Save the best model
+            best_model_name = f'unetlstm_ipw_dim_horizon_{dim_horizon}_wildfire_bootstrap_{random_seed}.pth'
+            torch.save(ipw_model.state_dict(), os.path.join(models_dir, best_model_name))
+        else:
+            patience_counter += 1
+            print(f"No improvement in test MSE for {patience_counter} epoch(s).")
+
+        if patience_counter >= early_stopping_patience:
+            print(f"Early stopping triggered. Best Test MSE: {best_loss:.4f}")
+            break
+
+    ###########################
+    # Counterfactual analysis #
+    ###########################
     ### Counterfactual analysis
     aux = np.zeros((10, h0, w0))
     Y_outs = np.zeros((10, h0, w0))
@@ -435,22 +490,20 @@ def main():
         inputs = torch.cat([x, A_past, Y_past], dim=2).to(device)
         inputs = pad_func(inputs)
         
-        
         use_best_model = True
         if use_best_model:
             # Load best model
-            best_model = gstunet.GSTUNet(in_channel = in_channel, h_size=h_size, A_counter = A_counter, fc_layer_sizes=fc_layer_sizes, 
-                                        dim_treatments = dim_treatments, dim_outcome = dim_outcome, dim_horizon = dim_horizon, 
-                                        use_constant_feature = use_constant_feature, attention=attention).to(device)
+            best_model = unet.UNetConvLSTM(in_channel=in_channel, n_classes=1, 
+                                           dim_static=dim_horizon, bilinear=False, attention=attention).to(device)
             state_dict = torch.load(os.path.join(models_dir, best_model_name), weights_only=True)
             best_model.load_state_dict(state_dict)
             best_model.eval()
             # Outputs from the best model
-            outputs = best_model.forward(inputs).reshape(height, width)
+            outputs = best_model.forward(inputs, A_counter.squeeze(1).unsqueeze(0)).squeeze(1).reshape(height, width)
         else:
             # Outputs from the best model
-            model.eval()
-            outputs = model.forward(inputs).reshape(height, width)
+            ipw_model.eval()
+            outputs = ipw_model.forward(inputs, A_counter.squeeze(1).unsqueeze(0)).reshape(height, width)
         denorm_outputs = normalizer.denormalize_Y(outputs.reshape(1, 1, height, width).detach().cpu()).reshape(height, width)
         outputs_cropped = crop_func(denorm_outputs)
         aux[i] = outputs_cropped.numpy()
@@ -484,7 +537,7 @@ def main():
     additional_resp = int(counties_gdf.loc[exposed_filter, "resp_x"].sum())
     print("Additional respiratory hospitalizations over 10 days: ", additional_resp)
     os.makedirs(bootstrap_folder, exist_ok=True)
-    filename = os.path.join(bootstrap_folder, f"gstunet_{random_seed}.txt")
+    filename = os.path.join(bootstrap_folder, f"ipw_{random_seed}.txt")
     d = {}
     d["additional_resp"] = additional_resp
     for county in exposed_counties:
