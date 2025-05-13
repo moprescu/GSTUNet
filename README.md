@@ -1,4 +1,4 @@
-# GST-UNet: Spatiotemporal Causal Inference with Time-Varying Confounders
+# GST-UNet: A Neural Framework for Spatiotemporal Causal Inference with Time-Varying Confounding
 
 GST-UNet is a neural framework that combines a U-Net-based architecture with iterative G-computation to estimate causal effects in spatiotemporal settings, addressing interference, temporal carryover, and time-varying confounders for Conditional Average Potential Outcome (CAPO) estimation.
 
@@ -11,7 +11,7 @@ GST-UNet is a neural framework that combines a U-Net-based architecture with ite
 
 ## Replication Code for Paper
 
-Use the following commands to replicate the figures from the "GST-UNet: Spatiotemporal Causal Inference with Time-Varying Confounders" paper:
+Use the following commands to replicate the figures from the "GST-UNet: A Neural Framework for Spatiotemporal Causal Inference with Time-Varying Confounding" paper:
 
 * For Table 1: 
 

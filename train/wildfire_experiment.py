@@ -36,7 +36,7 @@ plt.rcParams["font.family"] = "serif"
 plt.rcParams["mathtext.fontset"] = "dejavuserif"
 plt.rcParams['pdf.fonttype'] = 42
 plt.rcParams['ps.fonttype'] = 42
-plt.rcParams['font.size'] = 14
+plt.rcParams['font.size'] = 18
 
 #######################################
 ### Training and Experiment Utils   ###
@@ -694,13 +694,13 @@ def main():
         missing_kwds={'color': 'lightgray'} )
 
     axes.set_title(
-        "Camp Fire: Factual vs. Counterfactual Respiratory Illness",
-        fontsize=14, pad=10
+        "Camp Fire Respiratory Illness",
+        fontsize=18, pad=10
     )
     cbar0 = fig.colorbar(axes.collections[0], ax=axes, shrink=0.85)
     cbar0.set_label(
-        "Factual - Counterfactual\nRespiratory Illness Incidence (cases per 10,000)",
-        fontsize=14
+        "Factual - Counterfactual Incidence\n(cases per 10,000)",
+        fontsize=18
     )
 
     # Hash out small population counties
@@ -745,6 +745,7 @@ def main():
         suffix += "_hashed"
 
     plt.xlabel(r"Longitude ($^o$)")
+    plt.xticks([-124, -122, -120, -118, -116, -114], [-124, -122, -120, -118, -116, -114], fontsize=18)
     plt.ylabel(r"Latitude ($^o$)")
     plt.savefig(os.path.join(figs_dir, f"Factual_vs_counterfactual_respiratory_illness{suffix}.pdf"), dpi=200, bbox_inches="tight")
     plt.savefig(os.path.join(figs_dir, f"Factual_vs_counterfactual_respiratory_illness{suffix}.png"), dpi=200, bbox_inches="tight")
