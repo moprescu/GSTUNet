@@ -160,7 +160,7 @@ def main():
     in_channel = 7
     attention = True
     best_propensity_model_name = f'unetlstm_propensity_dim_horizon_{dim_horizon}_wildfire_bootstrap_{random_seed}.pth'
-    best_model_name = f'ipw_dim_horizon_{dim_horizon}_wildfire_bootstrap_{random_seed}.pth'
+    best_model_name = f'unetlstm_ipw_dim_horizon_{dim_horizon}_wildfire_bootstrap_{random_seed}.pth'
 
     # Data loader
     train_loader = torch.utils.data.DataLoader(dataset=train_dataset,
@@ -237,6 +237,8 @@ def main():
                 )
                 metric = BinaryAUROC()
                 preds = torch.sigmoid(logits)
+                print("Preds mean:", preds.mean())
+                print("A_curr_unnorm mean:", A_curr_unnorm.mean())
                 print(f"Propensity AUC: {metric(preds, A_curr_unnorm.type_as(preds)):.4f}")
 
         # Validation / Testing
@@ -324,8 +326,8 @@ def main():
                 # i.e. from 0..(tlen - dim_horizon + head_idx)
                 cutpoint = tlen - dim_horizon + head_idx
                 x_sub_norm = x_norm[:, :cutpoint]  # shape: [b, cutpoint, 3, H, W]
-                A_sub_norm = A_norm[:, :cutpoint].reshape(b, cutpoint, 1, height, width)
-                Y_sub_norm = Y_norm[:, :cutpoint].reshape(b, cutpoint, 1, height, width)
+                A_sub_norm = A_norm[:, :cutpoint].reshape(b, cutpoint, 1, h0, w0)
+                Y_sub_norm = Y_norm[:, :cutpoint].reshape(b, cutpoint, 1, h0, w0)
                 inputs_sub = torch.cat([x_sub_norm, A_sub_norm, Y_sub_norm], dim=2).to(device)
 
                 with torch.no_grad():
@@ -340,12 +342,12 @@ def main():
             A_future = A_raw[:, tlen - dim_horizon : tlen]
             A_counter_batch = A_counter.squeeze(1).repeat(b, 1, 1, 1).clone().to(device)
             # Pad inputs
-            Y_out = pad_func(Y_out.unsqueeze(1))
+            Y_out = pad_func(Y_out)
             A_future = pad_func(A_future)
-            A_counter_batch = pad_func(A_counter_batch)
             # Calculate the IPW weights
             mask = (A_future.to(device) == A_counter_batch).float()
             probas_counter = (probas)*((A_counter_batch==1).float()) + (1-probas)*((A_counter_batch==0).float())
+            print("Mean 1-probas:", (1-probas).mean())
             weight = torch.ones(b, height, width, device=device)
             for head_idx in range(dim_horizon):
                 weight *= (mask[:, head_idx] / (probas_counter[:, head_idx] + 1e-8))
@@ -354,8 +356,8 @@ def main():
 
             # Now pass the (normalized) *past* input to the IPW model:
             x_sub_norm = x_norm[:, : tlen - dim_horizon]
-            A_sub_norm = A_norm[:, : tlen - dim_horizon].reshape(b, tlen - dim_horizon, 1, height, width)
-            Y_sub_norm = Y_norm[:, : tlen - dim_horizon].reshape(b, tlen - dim_horizon, 1, height, width)
+            A_sub_norm = A_norm[:, : tlen - dim_horizon].reshape(b, tlen - dim_horizon, 1, h0, w0)
+            Y_sub_norm = Y_norm[:, : tlen - dim_horizon].reshape(b, tlen - dim_horizon, 1, h0, w0)
             inputs_ipw = torch.cat([x_sub_norm, A_sub_norm, Y_sub_norm], dim=2).to(device)
 
             # IPW model predicts the final outcome
@@ -380,6 +382,7 @@ def main():
                 print('[epoch: {}/{}] [step {}/{}] MSE: {:.4f}'.format(
                     epoch + 1, num_epochs, i, len(train_loader_normalized), loss.item())
                 )
+                print("Y_out_ipw mean:", Y_out_ipw.mean())
 
         # Validation / Testing
         ipw_model.eval()
@@ -396,8 +399,8 @@ def main():
                     # i.e. from 0..(tlen - dim_horizon + head_idx)
                     cutpoint = tlen - dim_horizon + head_idx
                     x_sub_norm = x_norm[:, :cutpoint]  # shape: [b, cutpoint, 3, H, W]
-                    A_sub_norm = A_norm[:, :cutpoint].reshape(b, cutpoint, 1, height, width)
-                    Y_sub_norm = Y_norm[:, :cutpoint].reshape(b, cutpoint, 1, height, width)
+                    A_sub_norm = A_norm[:, :cutpoint].reshape(b, cutpoint, 1, h0, w0)
+                    Y_sub_norm = Y_norm[:, :cutpoint].reshape(b, cutpoint, 1, h0, w0)
                     inputs_sub = torch.cat([x_sub_norm, A_sub_norm, Y_sub_norm], dim=2).to(device)
 
                     with torch.no_grad():
@@ -412,9 +415,8 @@ def main():
                 A_future = A_raw[:, tlen - dim_horizon : tlen]
                 A_counter_batch = A_counter.squeeze(1).repeat(b, 1, 1, 1).clone().to(device)
                 # Pad inputs
-                Y_out = pad_func(Y_out.unsqueeze(1))
+                Y_out = pad_func(Y_out)
                 A_future = pad_func(A_future)
-                A_counter_batch = pad_func(A_counter_batch)
                 # Calculate the IPW weights
                 mask = (A_future.to(device) == A_counter_batch).float()
                 probas_counter = (probas)*((A_counter_batch==1).float()) + (1-probas)*((A_counter_batch==0).float())
@@ -426,8 +428,8 @@ def main():
 
                 # Now pass the (normalized) *past* input to the IPW model:
                 x_sub_norm = x_norm[:, : tlen - dim_horizon]
-                A_sub_norm = A_norm[:, : tlen - dim_horizon].reshape(b, tlen - dim_horizon, 1, height, width)
-                Y_sub_norm = Y_norm[:, : tlen - dim_horizon].reshape(b, tlen - dim_horizon, 1, height, width)
+                A_sub_norm = A_norm[:, : tlen - dim_horizon].reshape(b, tlen - dim_horizon, 1, h0, w0)
+                Y_sub_norm = Y_norm[:, : tlen - dim_horizon].reshape(b, tlen - dim_horizon, 1, h0, w0)
                 inputs_ipw = torch.cat([x_sub_norm, A_sub_norm, Y_sub_norm], dim=2).to(device)
 
                 # IPW model predicts the final outcome
@@ -456,7 +458,6 @@ def main():
             best_loss = avg_test_mse
             patience_counter = 0
             # Save the best model
-            best_model_name = f'unetlstm_ipw_dim_horizon_{dim_horizon}_wildfire_bootstrap_{random_seed}.pth'
             torch.save(ipw_model.state_dict(), os.path.join(models_dir, best_model_name))
         else:
             patience_counter += 1
@@ -494,22 +495,26 @@ def main():
         if use_best_model:
             # Load best model
             best_model = unet.UNetConvLSTM(in_channel=in_channel, n_classes=1, 
-                                           dim_static=dim_horizon, bilinear=False, attention=attention).to(device)
+                                           dim_static=0, bilinear=False, attention=attention).to(device)
             state_dict = torch.load(os.path.join(models_dir, best_model_name), weights_only=True)
             best_model.load_state_dict(state_dict)
             best_model.eval()
             # Outputs from the best model
-            outputs = best_model.forward(inputs, A_counter.squeeze(1).unsqueeze(0)).squeeze(1).reshape(height, width)
+            outputs = best_model.forward(inputs).squeeze(1).reshape(height, width)
         else:
             # Outputs from the best model
             ipw_model.eval()
-            outputs = ipw_model.forward(inputs, A_counter.squeeze(1).unsqueeze(0)).reshape(height, width)
+            outputs = ipw_model.forward(inputs).reshape(height, width)
         denorm_outputs = normalizer.denormalize_Y(outputs.reshape(1, 1, height, width).detach().cpu()).reshape(height, width)
         outputs_cropped = crop_func(denorm_outputs)
         aux[i] = outputs_cropped.numpy()
         Y_outs[i] = Y_out = Y_out.numpy()
                 
     ### Analysis of counterfactuals
+    mask = torch.tensor(np_weights).to(device)
+    mask.shape # 40 x 44 expected 
+    padded_mask = pad_func(mask)
+    padded_mask = padded_mask.unsqueeze(0).unsqueeze(1)
     denorm_outputs = normalizer.denormalize_Y(outputs.reshape(1, 1, height, width).detach().cpu()).reshape(height, width)
     outputs_cropped = crop_func(denorm_outputs)
     outputs_cropped = aux.sum(axis=0)
